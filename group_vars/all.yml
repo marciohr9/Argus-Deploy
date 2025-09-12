@@ -1,0 +1,15 @@
+# group_vars/all.yml
+# Variáveis globais (não colocar envs específicas de projetos aqui)
+
+# Diretório base onde os projetos serão clonados/implantados
+base_opt_dir: "{{ lookup('env', 'BASE_DIR') | default('/opt', true) }}"
+
+# Traefik (role opcional)
+traefik_dir: "{{ base_opt_dir }}/traefik"
+proxy_network_name: "{{ lookup('env', 'PROXY_NETWORK_NAME') | default('proxy', true) }}"
+
+# E-mail do Let's Encrypt (forneça via ENV: LE_EMAIL)
+le_email: "{{ lookup('env', 'LE_EMAIL') | default('', true) }}"
+
+# Tempo máximo para health-check (segundos)
+health_timeout_seconds: 300

@@ -1,0 +1,35 @@
+# roles/traefik/templates/traefik.compose.yml.j2
+version: "3.9"
+
+networks:
+  {{ proxy_network_name }}:
+    external: true
+
+services:
+  traefik:
+    image: traefik:2.11
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Redireciona HTTP->HTTPS
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      # Let's Encrypt via TLS-ALPN challenge (porta 443)
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --certificatesresolvers.le.acme.email={{ le_email }}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      # (Opcional) Dashboard pode ser exposto via labels seguras
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Necessário para provider docker
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Armazena certificados
+      - {{ traefik_dir }}/letsencrypt:/letsencrypt
+    networks:
+      - {{ proxy_network_name }}

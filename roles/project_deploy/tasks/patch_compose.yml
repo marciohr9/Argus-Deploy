@@ -1,0 +1,51 @@
+---
+# Este arquivo modifica a estrutura YAML carregada em 'compose_data',
+# garantindo a network externa '{{ proxy_network_name }}' no topo e anexando-a
+# a todos os serviços, preservando redes existentes (lista ou mapping).
+
+- name: Garante chave 'networks' no topo do compose
+  ansible.builtin.set_fact:
+    compose_data: "{{ compose_data | combine({'networks': compose_data.get('networks', {})}, recursive=True) }}"
+
+- name: Injeta network externa '{{ proxy_network_name }}' no topo se ausente
+  when: compose_data.networks.get(proxy_network_name, None) is not defined
+  ansible.builtin.set_fact:
+    compose_data: >-
+      {{
+        compose_data | combine(
+          {
+            'networks': compose_data.networks | combine(
+              { proxy_network_name: { 'external': true, 'name': proxy_network_name } },
+              recursive=True
+            )
+          },
+          recursive=True
+        )
+      }}
+
+- name: Garante seção 'services' presente
+  ansible.builtin.assert:
+    that:
+      - compose_data.services is defined
+    fail_msg: "Seção 'services' ausente no docker-compose.yml."
+
+- name: Coleta lista de serviços
+  ansible.builtin.set_fact:
+    _service_list: "{{ compose_data.services.keys() | list }}"
+
+- name: Anexa network '{{ proxy_network_name }}' a cada serviço
+  vars:
+    svc: "{{ item }}"
+    svc_def: "{{ compose_data.services[svc] }}"
+    updated_networks: >-
+      {% if svc_def.networks is not defined %}
+      [ "{{ proxy_network_name }}" ]
+      {% elif svc_def.networks is mapping %}
+      {{ svc_def.networks | combine({ proxy_network_name: {} }, recursive=True) }}
+      {% else %}
+      {{ (svc_def.networks + [proxy_network_name]) | unique }}
+      {% endif %}
+    new_svc_def: "{{ svc_def | combine({'networks': updated_networks}, recursive=True) }}"
+  ansible.builtin.set_fact:
+    compose_data: "{{ compose_data | combine({'services': { svc: new_svc_def }}, recursive=True) }}"
+  loop: "{{ _service_list }}"

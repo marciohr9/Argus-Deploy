@@ -1,0 +1,215 @@
+---
+# Sub-tarefas por projeto (variável 'project' disponível)
+
+# Caminho absoluto do compose
+- name: Calcula caminho absoluto do compose
+  ansible.builtin.set_fact:
+    _compose_abs_path: >-
+      {{
+        (project.compose_path is search('^/'))
+          | ternary(project.compose_path, project.dir ~ '/' ~ project.compose_path)
+      }}
+
+# Diretório do projeto
+- name: Cria diretório do projeto
+  ansible.builtin.file:
+    path: "{{ project.dir }}"
+    state: directory
+    mode: "0755"
+
+# Clone/Update (SSH)
+- name: (SSH) Grava chave privada temporária quando fornecida inline
+  when: project.auth_method == 'ssh' and project.ssh_key_inline | length > 0
+  no_log: true
+  ansible.builtin.copy:
+    dest: "{{ project.dir }}/.git_ssh_key"
+    content: "{{ project.ssh_key_inline }}"
+    mode: "0600"
+
+- name: (SSH) Clona/atualiza repositório
+  when: project.auth_method == 'ssh'
+  no_log: true
+  ansible.builtin.git:
+    repo: "{{ project.repo_url }}"
+    dest: "{{ project.dir }}"
+    key_file: >-
+      {{
+        (project.ssh_key_inline | length > 0)
+          | ternary(project.dir ~ '/.git_ssh_key', project.ssh_key_path)
+      }}
+    version: "{{ project.version | default('HEAD') }}"
+    accept_hostkey: true
+    update: yes
+
+# Clone/Update (HTTPS)
+- name: (HTTPS) Clona/atualiza repositório
+  when: project.auth_method == 'https'
+  no_log: true
+  ansible.builtin.git:
+    repo: "{{ project.repo_url }}"
+    dest: "{{ project.dir }}"
+    version: "{{ project.version | default('HEAD') }}"
+    update: yes
+
+# docker-compose obrigatório
+- name: Verifica existência do docker-compose no caminho informado
+  ansible.builtin.stat:
+    path: "{{ _compose_abs_path }}"
+  register: _compose_stat
+
+- name: Falha se docker-compose.yml não encontrado
+  ansible.builtin.assert:
+    that:
+      - _compose_stat.stat.exists
+    fail_msg: "Compose não encontrado em {{ _compose_abs_path }}"
+
+# .env do projeto (merge a partir do arquivo no control node)
+- name: Determina fonte de envs no control node
+  ansible.builtin.set_fact:
+    _env_src: >-
+      {{ (project.env_src | length > 0) | ternary(project.env_src, './projeto.envs') }}
+
+- name: Lê arquivo de envs do control node (se existir)
+  no_log: true
+  ansible.builtin.set_fact:
+    _env_src_text: "{{ lookup('file', _env_src, errors='ignore') | default('', true) }}"
+
+- name: Extrai pares KEY=VALUE do arquivo de envs
+  no_log: true
+  ansible.builtin.set_fact:
+    _env_src_pairs: "{{ _env_src_text | regex_findall('(?m)^(?!#)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(.*)\\s*$') }}"
+    _env_src_map: >-
+      {{
+        dict(
+          _env_src_pairs | map('first') | list
+          | zip(_env_src_pairs | map('last') | list)
+        )
+      }}
+
+- name: Verifica se já existe .env no projeto
+  ansible.builtin.stat:
+    path: "{{ project.dir }}/.env"
+  register: _env_stat
+
+- name: Lê .env existente (se houver) para merge
+  when: _env_stat.stat.exists
+  no_log: true
+  ansible.builtin.slurp:
+    src: "{{ project.dir }}/.env"
+  register: _env_slurp
+
+- name: Extrai pares KEY=VALUE do .env atual (se houver)
+  when: _env_stat.stat.exists
+  no_log: true
+  ansible.builtin.set_fact:
+    _env_existing_text: "{{ (_env_slurp.content | b64decode) | default('', true) }}"
+    _env_existing_pairs: "{{ _env_existing_text | regex_findall('(?m)^(?!#)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(.*)\\s*$') }}"
+    _env_existing_map: >-
+      {{
+        dict(
+          _env_existing_pairs | map('first') | list
+          | zip(_env_existing_pairs | map('last') | list)
+        )
+      }}
+
+- name: Calcula mapa final do .env (preserva existentes; adiciona ausentes)
+  no_log: true
+  ansible.builtin.set_fact:
+    _env_final_map: "{{ (_env_src_map | default({})) | combine((_env_existing_map | default({})), recursive=False) }}"
+
+- name: Gera conteúdo final do .env (ordenado)
+  no_log: true
+  ansible.builtin.set_fact:
+    _env_final_content: >-
+      {{
+        (_env_final_map | dict2items | sort(attribute='key') | map('join','=') | list | join('\n')) ~ '\n'
+      }}
+
+- name: Cria/atualiza .env do projeto
+  no_log: true
+  ansible.builtin.copy:
+    dest: "{{ project.dir }}/.env"
+    content: "{{ _env_final_content }}"
+    owner: root
+    group: root
+    mode: "0640"
+
+# Patch da network 'proxy' (se existir)
+- name: Carrega YAML do compose para variável (para patch)
+  when: proxy_network_exists
+  ansible.builtin.slurp:
+    src: "{{ _compose_abs_path }}"
+  register: _compose_slurp
+
+- name: Converte YAML para dict
+  when: proxy_network_exists
+  ansible.builtin.set_fact:
+    compose_data: "{{ _compose_slurp.content | b64decode | from_yaml }}"
+
+- name: Aplica patch para usar a network externa '{{ proxy_network_name }}'
+  when: proxy_network_exists
+  ansible.builtin.include_tasks: patch_compose.yml
+
+- name: Escreve compose atualizado (se houve patch)
+  when: proxy_network_exists
+  ansible.builtin.copy:
+    dest: "{{ _compose_abs_path }}"
+    content: "{{ compose_data | to_nice_yaml(indent=2) }}"
+    mode: "0644"
+
+# Build & Up com Compose v2
+- name: Build das imagens do projeto
+  community.docker.docker_compose_v2:
+    project_src: "{{ project.dir }}"
+    project_name: "{{ project.name }}"
+    files:
+      - "{{ project.compose_path }}"
+    build: always
+
+- name: Sobe o projeto (up -d)
+  community.docker.docker_compose_v2:
+    project_src: "{{ project.dir }}"
+    project_name: "{{ project.name }}"
+    files:
+      - "{{ project.compose_path }}"
+    state: present
+    recreate: auto
+    pull: missing
+
+# Health-check
+- name: Descobre nomes dos containers do projeto
+  community.docker.docker_host_info:
+    containers: true
+  register: _host_info
+
+- name: Lista nomes dos containers do projeto atual
+  ansible.builtin.set_fact:
+    _project_container_names: >-
+      {{
+        _host_info.containers
+        | selectattr('Labels.com.docker.compose.project', 'defined')
+        | selectattr('Labels.com.docker.compose.project', 'equalto', project.name)
+        | map(attribute='Name') | map('regex_replace','^/','') | list
+      }}
+
+- name: Espera cada container ficar running/healthy
+  community.docker.docker_container_info:
+    name: "{{ item }}"
+  register: _ci
+  until: >
+    (_ci.container.State.Status == 'running') and
+    (
+      (_ci.container.State.Health is not defined) or
+      (_ci.container.State.Health.Status == 'healthy')
+    )
+  retries: "{{ (health_timeout_seconds // 5) | int }}"
+  delay: 5
+  loop: "{{ _project_container_names }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Falha se nenhum container foi encontrado para o projeto
+  ansible.builtin.assert:
+    that:
+      - _project_container_names | length > 0
+    fail_msg: "Nenhum container do projeto '{{ project.name }}' foi encontrado após o deploy."

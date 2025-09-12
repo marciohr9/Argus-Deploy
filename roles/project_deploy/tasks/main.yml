@@ -1,0 +1,86 @@
+---
+# Role: project_deploy (multi-projetos)
+
+# ---------- 0) Coleta lista de projetos pela ENV PROJECTS ----------
+- name: Captura lista bruta de IDs de projetos da ENV PROJECTS
+  ansible.builtin.set_fact:
+    _projects_ids_raw: "{{ lookup('env','PROJECTS') | default('', true) }}"
+
+- name: Converte PROJECTS em lista normalizada
+  ansible.builtin.set_fact:
+    _project_ids: "{{ _projects_ids_raw.split(',') | map('trim') | reject('equalto','') | list }}"
+
+- name: Falha se nenhum projeto foi declarado
+  ansible.builtin.assert:
+    that:
+      - _project_ids | length > 0
+    fail_msg: >
+      Nenhum projeto encontrado. Defina PROJECTS="id1,id2" e as ENVs
+      <ID>__REPO_URL, etc.
+
+# ---------- 1) Inicializa lista agregada ----------
+- name: Inicializa lista de projetos
+  ansible.builtin.set_fact:
+    _projects: []
+
+# ---------- 2) Monta cada projeto a partir das ENVs (estilo linter-friendly) ----------
+- name: Monta estrutura de cada projeto a partir das ENVs
+  vars:
+    _ID: "{{ item }}"
+    _IDU: "{{ item | regex_replace('[^A-Za-z0-9_]', '_') | upper }}"
+    _default_dir: "{{ base_opt_dir ~ '/' ~ item }}"
+    _env_src_default: "./{{ item }}.env"
+    project_obj:
+      id: "{{ _ID }}"
+      name: "{{ lookup('env', _IDU ~ '__PROJECT_NAME') | default(_ID, true) }}"
+      repo_url: "{{ lookup('env', _IDU ~ '__REPO_URL') | default('', true) }}"
+      auth_method: "{{ lookup('env', _IDU ~ '__AUTH') | default('ssh', true) }}"
+      ssh_key_inline: "{{ lookup('env', _IDU ~ '__REPO_SSH_PRIVATE_KEY') | default('', true) }}"
+      ssh_key_path: "{{ lookup('env', _IDU ~ '__REPO_SSH_KEY_PATH') | default('', true) }}"
+      username: "{{ lookup('env', _IDU ~ '__REPO_USERNAME') | default('', true) }}"
+      password: "{{ lookup('env', _IDU ~ '__REPO_PASSWORD') | default('', true) }}"
+      version: "{{ lookup('env', _IDU ~ '__VERSION') | default('HEAD', true) }}"
+      dir: "{{ lookup('env', _IDU ~ '__PROJECT_DIR') | default(_default_dir, true) }}"
+      compose_path: "{{ lookup('env', _IDU ~ '__COMPOSE_PATH') | default('docker-compose.yml', true) }}"
+      env_src: "{{ lookup('env', _IDU ~ '__ENV_SRC') | default(_env_src_default, true) }}"
+  ansible.builtin.set_fact:
+    _projects: "{{ _projects + [ project_obj ] }}"
+  loop: "{{ _project_ids }}"
+  loop_control:
+    label: "{{ item }}"
+  no_log: true
+
+- name: Valida que todos os projetos possuem REPO_URL
+  ansible.builtin.assert:
+    that: "{{ (_projects | map(attribute='repo_url') | list) | select('length') | list | length == (_projects | length) }}"
+    fail_msg: "Um ou mais projetos não possuem <ID>__REPO_URL definidos."
+
+# ---------- 3) Descobre se a network 'proxy' existe (uma vez) ----------
+- name: Verifica se a network externa '{{ proxy_network_name }}' existe no Docker
+  community.docker.docker_network_info:
+    name: "{{ proxy_network_name }}"
+  register: _proxy_net
+  changed_when: false
+  failed_when: false
+
+- name: Define flag global de existência da network 'proxy'
+  ansible.builtin.set_fact:
+    proxy_network_exists: >-
+      {{ (_proxy_net.exists is defined and _proxy_net.exists)
+         or ((_proxy_net.networks | default([])) | length > 0) }}
+
+- name: Aviso quando a network '{{ proxy_network_name }}' não existe
+  ansible.builtin.debug:
+    msg: >
+      A network '{{ proxy_network_name }}' não existe. Os docker-compose.yml
+      não serão alterados para incluir essa rede. Crie-a (ex.: role 'traefik')
+      com: docker network create {{ proxy_network_name }}.
+  when: not proxy_network_exists
+
+# ---------- 4) Processa cada projeto ----------
+- name: Processa cada projeto (clone -> .env -> patch -> build/up -> health)
+  ansible.builtin.include_tasks: "_per_project.yml"
+  loop: "{{ _projects }}"
+  loop_control:
+    loop_var: project
+    label: "{{ project.id }}"

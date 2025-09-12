@@ -1,0 +1,97 @@
+# roles/setup_docker/tasks/main.yml
+---
+# Esta role identifica a família do SO e instala Docker Engine + docker compose plugin
+# de forma idempotente. Também garante serviço ativo.
+
+# Checa se Docker e Docker Compose já estão instalados
+- name: Checa se 'docker' está disponível
+  ansible.builtin.command: docker --version
+  register: docker_check
+  changed_when: false
+  failed_when: false
+
+- name: Checa se 'docker compose' está disponível
+  ansible.builtin.command: docker compose version
+  register: compose_check
+  changed_when: false
+  failed_when: false
+
+# Exibe status atual do docker e docker compose
+- name: Exibe status atual
+  ansible.builtin.debug:
+    msg:
+      - "Docker encontrado: {{ docker_check.rc == 0 }}"
+      - "Compose v2 encontrado: {{ compose_check.rc == 0 }}"
+
+# Instala docker Compose em Distribuições Debian/Ubuntu
+- name: Instala Docker/Compose em distros Debian/Ubuntu
+  when: ansible_facts.os_family == 'Debian' and (docker_check.rc != 0 or compose_check.rc != 0)
+  block:
+    - name: Instala pacotes de pré-requisito
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        update_cache: true
+        state: present
+
+    - name: Adiciona chave GPG oficial do Docker
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/{{ ansible_facts.distribution | lower }}/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Configura repositório Docker
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        mode: '0644'
+        content: |
+          deb [arch={{ ansible_facts.architecture }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/{{ ansible_facts.distribution | lower }} {{ ansible_facts.distribution_release }} stable
+
+    - name: Instala Docker Engine + plugins (inclui docker compose v2)
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        update_cache: true
+        state: present
+
+# Instala docker Compose em Distribuições RHEL/CentOS/Alma/Rocky
+- name: Instala Docker/Compose em distros RHEL/CentOS/Alma/Rocky
+  when: ansible_facts.os_family == 'RedHat' and (docker_check.rc != 0 or compose_check.rc != 0)
+  block:
+    - name: Adiciona repositório Docker (yum/dnf)
+      ansible.builtin.yum_repository:
+        name: docker-ce-stable
+        description: Docker CE Stable - $basearch
+        baseurl: https://download.docker.com/linux/centos/$releasever/$basearch/stable
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg
+        enabled: yes
+
+    - name: Instala Docker Engine + plugins
+      ansible.builtin.yum:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+# checa se Docker foi instalado e iniciado
+- name: Garante serviço do Docker ativo e habilitado
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+# valida versões do docker e docker compose
+- name: Revalida docker/compose após instalação
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - docker --version
+    - docker compose version
+  changed_when: false

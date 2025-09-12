@@ -1,0 +1,43 @@
+# playbooks/deploy.yml
+---
+- name: Deploy completo com prompts S/N
+  hosts: targets
+  gather_facts: true
+  # Pergunta Interativa (S/N) para instalação Docker e Traefik
+  # opção padrão para Docker = 'S' (sim)
+  # opção padrão para Traefik = 'S' (sim)
+  vars_prompt:
+    # Pergunta interativa para instalação do Docker e Docker Compose
+    - name: confirm_docker_install
+      prompt: "Deseja checar/instalar Docker e Docker Compose? (S/N)"
+      private: no
+      default: "S"
+      validate: '^(?i:[sn])$'
+    # Pergunta interativa para instalação do Traefik + Let's Encrypt
+    - name: confirm_install_proxy
+      prompt: "Deseja instalar o proxy/certificação (Traefik + Let's Encrypt)? (S/N)"
+      private: no
+      default: "S"
+      validate: '^(?i:[sn])$'
+  # tarefas executaras antes das roles iniciarem o trabalho
+  pre_tasks:
+    # Normaliza respostas do pronpt para maiúsculas
+    - name: Normaliza respostas (maiúsculas)
+      ansible.builtin.set_fact:
+        confirm_docker_install: "{{ confirm_docker_install | upper }}"
+        confirm_install_proxy: "{{ confirm_install_proxy | upper }}"
+    # Valida se a váriavel de URL do email usado no letsencrypt foi informada via variáveis de ambiente (ENV)
+    - name: Valida e-mail do Let's Encrypt quando Traefik = 'S'
+      when: confirm_install_proxy == 'S'
+      ansible.builtin.assert:
+        that:
+          - le_email | length > 0
+        fail_msg: "LE_EMAIL não definido nas ENVs. Defina LE_EMAIL para prosseguir com Traefik."
+        success_msg: "LE_EMAIL definido para Traefik."
+        
+  # executa as ações do script do ansible
+  roles:
+    - { role: setup_docker, when: confirm_docker_install == 'S' }
+    - { role: traefik,      when: confirm_install_proxy == 'S' }
+    - role: project_deploy
+      # Sempre realiza deploy do projeto; a role já é consciente da opção do Traefik.
