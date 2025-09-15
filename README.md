@@ -1,4 +1,4 @@
-# Deploy com Ansible + Docker — Multi-projetos - (Traefik opcional)
+# Deploy com Ansible + Docker — Multi-projetos (Traefik opcional)
 
 Este repositório entrega um **pipeline de deploy automatizado com Ansible** para aplicações containerizadas, com **suporte a 1..N projetos** definidos por variáveis de ambiente.  
 A automação segue **boas práticas** (roles, idempotência, coleções oficiais, YAML seguro) e cobre:
@@ -9,6 +9,33 @@ A automação segue **boas práticas** (roles, idempotência, coleções oficiai
 - **Clonar/atualizar N repositórios**, **gerar/atualizar `.env` por projeto** a partir de arquivos `*.envs` no nó de controle;
 - **Patch condicional** do `docker-compose.yml` para **usar a rede externa `proxy`** (apenas se a rede existir no host);
 - **Build e Up via Docker Compose v2** e **checagem de saúde** pós-deploy.
+
+---
+
+## ✅ Antes de começar (instalação do Ansible)
+
+Instale o **Ansible** e as **dependências do Galaxy** **antes** de rodar o script `.sh` ou o playbook.
+
+Debian/Ubuntu:
+```bash
+sudo apt-get update -y
+sudo apt-get install -y ansible
+```
+RHEL/CentOS/Alma/Rocky:
+```bash
+sudo dnf install -y ansible || sudo yum install -y ansible
+```
+Arch:
+```bash
+sudo pacman -S --noconfirm ansible
+```
+
+Dependências do Galaxy (obrigatório):
+```bash
+ansible-galaxy collection install -r requirements.yml
+# se houver roles:
+ansible-galaxy role install -r requirements.yml
+```
 
 ---
 
@@ -50,34 +77,30 @@ ansible-deploy/
 
 ## ✅ Pré-requisitos
 - Host(es) alvo(s) com Linux e **sudo** (ou root).
-- Python 3 no nó de controle (de onde você executa o Ansible).
+- Python 3 no nó de controle.
 - Internet para instalar pacotes e clonar repositórios.
-- **Docker Compose v2** (o módulo usa `docker compose`).
+- **Docker Compose v2** no host alvo (o módulo usa `docker compose` v2).
 
 ---
 
 ## 🚀 Bootstrap (opcional, recomendado)
-Use o script utilitário **`bootstrap-ansible.sh`** para:
-1) **Carregar** variáveis de **todos os arquivos `.env`** no diretório do projeto **(exceto os que terminam com `.example`)**;  
-   - Ordem de carga **lexicográfica**; o último arquivo pode sobrescrever chaves anteriores.  
-   - Opções:
-     - `ENV_DIR=/caminho` para indicar onde estão os `.env` (default: diretório do script).
-     - `ENV_FILE=/caminho/deploy.env` (opcional) carregado **antes** dos demais.
-     - `RYML=/caminho/requirements.yml` para apontar o `requirements.yml`.
-2) **Instalar** Ansible caso ausente;  
-3) **Instalar** as dependências do **`requirements.yml`** (collections/roles Galaxy).
+
+Use o script **`bootstrap-ansible.sh`** para **carregar variáveis** de **todos os arquivos `.env`** no diretório do projeto, **exceto** os que terminem com `.env.example`/`*.env.example`.  
+> **Atenção:** este script **não instala** Ansible nem dependências.
+
+- Ordem de carga **lexicográfica** (o último pode sobrescrever chaves anteriores).
+- Opção disponível:
+  - `ENV_DIR=/caminho` para indicar onde estão os `.env` (default: diretório do script).
 
 **Exemplo:**
 ```bash
 chmod +x bootstrap-ansible.sh
-# Carrega .envs do diretório do script + instala Ansible + requirements
+# Carrega .env, *.env, .env.*, *.envs (exceto *.env.example)
 ./bootstrap-ansible.sh
 
-# Ou indicando caminhos explicitamente
-ENV_DIR=$PWD RYML=$PWD/requirements.yml ./bootstrap-ansible.sh
+# Ou indicando explicitamente o diretório de .envs
+ENV_DIR=$PWD ./bootstrap-ansible.sh
 ```
-
-> O `deploy.env` (se usado via `ENV_FILE`) é um arquivo de **variáveis de ambiente do shell** (não o `.env` do projeto).
 
 ---
 
@@ -97,7 +120,7 @@ health_timeout_seconds: 300
 Defina a lista de projetos por `PROJECTS` e, para cada `<ID>`, configure ENVs com o **prefixo em maiúsculas e `__`**:
 
 ```
-PROJECTS="connecta,sei,novosga"
+PROJECTS="connecta,django,api"
 
 <CONNECTA__REPO_URL>           # obrigatório
 <CONNECTA__AUTH>               # ssh (padrão) | https
@@ -112,7 +135,7 @@ PROJECTS="connecta,sei,novosga"
 
 ### Exemplo prático
 ```bash
-export PROJECTS="connecta,sei"
+export PROJECTS="connecta,django"
 
 # projeto 1
 export CONNECTA__REPO_URL=git@github.com:org/connecta.git
@@ -123,14 +146,14 @@ export CONNECTA__COMPOSE_PATH=docker-compose.yml
 export CONNECTA__ENV_SRC=./connecta.envs
 
 # projeto 2
-export SEI__REPO_URL=https://git.example.com/gov/sei.git
-export SEI__AUTH=https
-export SEI__PROJECT_DIR=/opt/sei502
-export SEI__COMPOSE_PATH=docker/compose/prod.yml
-export SEI__ENV_SRC=./sei.envs
+export DJANGO__REPO_URL=https://git.example.com/org/django-app.git
+export DJANGO__AUTH=https
+export DJANGO__PROJECT_DIR=/opt/django-app
+export DJANGO__COMPOSE_PATH=docker/compose/prod.yml
+export DJANGO__ENV_SRC=./django.envs
 ```
 
-> **Dica:** consolide esses `export` em um `deploy.env` e use o `bootstrap-ansible.sh` para carregá-los.
+> **Dica:** consolide esses `export` em um `deploy.env` e rode o `bootstrap-ansible.sh` para carregá-los.
 
 ---
 
@@ -152,26 +175,7 @@ VIRTUAL_HOST=app.seu-dominio.gov.br
 
 ---
 
-## 📦 Instalar dependências Galaxy
-```bash
-ansible-galaxy collection install -r requirements.yml
-# se houver roles:
-ansible-galaxy role install -r requirements.yml
-```
-
-`requirements.yml` típico:
-```yaml
-collections:
-  - name: community.docker
-  - name: community.general
-  - name: ansible.utils
-```
-
----
-
 ## 📒 Inventário
-`inventory/hosts.ini` de exemplo:
-
 **Localhost**
 ```ini
 [targets]
@@ -188,7 +192,7 @@ app02 ansible_host=10.0.0.12 ansible_user=ubuntu
 ---
 
 ## ▶️ Execução
-1) Garanta as ENVs carregadas (ex.: `source deploy.env` ou use o `bootstrap-ansible.sh`).  
+1) Garanta as ENVs carregadas (ex.: `source deploy.env` **ou** use o `bootstrap-ansible.sh`).  
 2) Rode o play:
 ```bash
 ansible-playbook playbooks/deploy.yml -K
@@ -234,28 +238,10 @@ services:
 
 ## 🧪 Troubleshooting
 - **Nenhum projeto encontrado** → verifique `PROJECTS="id1,id2"` e `<ID>__REPO_URL`.
-- **Falha no clone** → confira método `ssh|https` e credenciais (preferível usar **token na URL**).
+- **Falha no clone** → confira método `ssh|https` e credenciais (prefira **token na URL**).
 - **`.env` incompleto** → revise o arquivo `<ID>__ENV_SRC` (ex.: `./connecta.envs`).
 - **Rede `proxy` ausente** → instale a role `traefik` (responda **S**) ou crie manualmente:
   ```bash
   docker network create proxy
   ```
 - **Certificados LE** → `LE_EMAIL` definido e portas 80/443 expostas; DNS correto.
-
----
-
-## 🔒 Segurança
-- Use **Ansible Vault** para segredos em YAML quando necessário.
-- Não versione chaves privadas ou senhas.
-- `.env` dos projetos é criado com permissão `0640`.
-
----
-
-## 🔧 Customizações & extensões
-- **Múltiplos Compose por projeto**: adapte `files: [...]` no módulo `docker_compose_v2`.
-- **Paralelismo**: para muitos projetos/hosts, considere `serial`, estratégias e/ou particionar lotes.
-- **Health-check específico**: personalize o critério para serviços críticos.
-
----
-
-**Pronto!** Você tem um fluxo padronizado para **deploy multi-projetos** com Ansible + Docker, com proxy TLS opcional via Traefik e geração automática de `.env` por projeto.
