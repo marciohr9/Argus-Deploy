@@ -1,7 +1,7 @@
 ---
 # Role: project_deploy (multi-projetos)
 
-# ---------- 0) Coleta lista de projetos pela ENV PROJECTS ----------
+#Coleta lista de projetos pela ENV PROJECTS
 - name: Captura IDs de projetos a partir da ENV PROJECTS
   ansible.builtin.set_fact:
     _project_ids: >-
@@ -20,12 +20,12 @@
     fail_msg: >-
       Nenhum projeto encontrado. Defina PROJECTS="id1,id2" e as ENVs <ID>__REPO_URL, etc.
       
-# ---------- 1) Inicializa lista agregada ----------
+#Inicializa lista agregada
 - name: Inicializa lista de projetos
   ansible.builtin.set_fact:
     _projects: []
 
-# ---------- 2) Monta cada projeto a partir das ENVs (estilo linter-friendly) ----------
+#Monta cada projeto a partir das ENVs
 - name: Monta estrutura de cada projeto a partir das ENVs
   vars:
     _ID:  "{{ item }}"
@@ -56,7 +56,7 @@
     var: _projects
   when: (ansible_verbosity | int) >= 1
 
-# === Valida se os os projetos tem repositório definidos ===
+#Valida se os os projetos tem repositório definidos
 - name: Valida que todos os projetos possuem REPO_URL
   vars:
     _missing: "{{ _projects | selectattr('repo_url', 'equalto', '') | map(attribute='id') | list }}"
@@ -67,7 +67,7 @@
     fail_msg: "Faltam REPO_URL para: {{ _missing | join(', ') }}. Defina <ID>__REPO_URL para cada ID em PROJECTS."
     success_msg: "Todos os projetos possuem REPO_URL."
 
-# ---------- 3) Descobre se a network 'proxy' existe (uma vez) ----------
+#Descobre se a network 'proxy' existe (uma vez)
 - name: Verifica se a network externa '{{ proxy_network_name }}' existe no Docker
   community.docker.docker_network_info:
     name: "{{ proxy_network_name }}"
@@ -89,7 +89,7 @@
       com: docker network create {{ proxy_network_name }}.
   when: not proxy_network_exists
 
-# ---------- 4) Processa cada projeto ----------
+# Processa cada projeto
 - name: Processa cada projeto (clone -> .env -> patch -> build/up -> health)
   ansible.builtin.include_tasks: "_per_project.yml"
   loop: "{{ _projects }}"

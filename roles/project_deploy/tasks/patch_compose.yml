@@ -1,6 +1,4 @@
-# Requer: compose_data (dict), proxy_network_name (str)
-
-# 1) Declara a network 'proxy' como externa na raiz do compose
+# Declara a network 'proxy' como externa na raiz do compose
 - name: Declara network 'proxy' como externa na raiz
   ansible.builtin.set_fact:
     compose_data: >-
@@ -12,7 +10,7 @@
           )
       }}
 
-# 2) Anexa 'proxy' a todos os serviços (preservando existentes)
+# Anexa 'proxy' a todos os serviços (preservando existentes)
 - name: Anexa 'proxy' às networks de cada serviço (como lista)
   vars:
     _svc_name: "{{ item.key }}"

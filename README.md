@@ -158,10 +158,9 @@ export FLUTTER__ENV_SRC=./django.envs
 ---
 
 ## 🔐 Sobre os arquivos `*.env` (control node) → `.env` do projeto
+
 Para cada `<ID>`, crie um arquivo `./<id>.env` (ou aponte outro caminho via `<ID>__ENV_SRC`).  
-Após o clone, a role `project_deploy` **gera/atualiza** o **`.env` na raiz do projeto** com merge **não destrutivo**:
-- **Preserva** chaves já existentes no `.env` do repositório;
-- **Adiciona** chaves ausentes a partir do `<id>.env`.
+Após o clone, a role `project_deploy` **copia** o **`<ID>.env` que está na raiz do playbook** e tranvere para o node **dentro da pasta do projeto com o nome `.env`**.
 
 **Exemplo de `django.env`:**
 ```
@@ -172,7 +171,6 @@ VIRTUAL_HOST=app.seu-dominio.gov.br
 ```
 
 > Esses `*.env` vivem no **nó de controle** (não no host alvo).
-
 ---
 
 ## 📒 Inventário
