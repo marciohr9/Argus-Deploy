@@ -82,12 +82,29 @@
           - containerd.io
           - docker-compose-plugin
         state: present
-# checa se Docker foi instalado e iniciado
-- name: Garante serviço do Docker ativo e habilitado
+
+# checa qual a distro do linux está rodando
+- name: Descobre service manager (systemd, service, openRC, etc)
+  ansible.builtin.set_fact:
+    _svc_mgr: "{{ ansible_facts.service_mgr | default(ansible_service_mgr | default('')) }}"
+
+# Systemd (Ubuntu, Debian, RHEL, Amazon Linux 2/2023, etc.)
+- name: Garante serviço do Docker ativo e habilitado (systemd)
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: _svc_mgr == "systemd"
+
+# Sistemas Legados
+- name: Garante serviço do Docker ativo e habilitado (service)
   ansible.builtin.service:
     name: docker
     state: started
     enabled: true
+  when: _svc_mgr not in ["systemd", "openrc"]
+
 # valida versões do docker e docker compose
 - name: Revalida docker/compose após instalação
   ansible.builtin.command: "{{ item }}"
