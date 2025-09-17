@@ -12,13 +12,11 @@
       prompt: "Deseja checar/instalar Docker e Docker Compose? (S/N)"
       private: no
       default: "S"
-      validate: '^(?i:[sn])$'
     # Pergunta interativa para instalação do Traefik + Let's Encrypt
     - name: confirm_install_proxy
       prompt: "Deseja instalar o proxy/certificação (Traefik + Let's Encrypt)? (S/N)"
       private: no
       default: "S"
-      validate: '^(?i:[sn])$'
   # tarefas executaras antes das roles iniciarem o trabalho
   pre_tasks:
     # Normaliza respostas do pronpt para maiúsculas
@@ -26,7 +24,20 @@
       ansible.builtin.set_fact:
         confirm_docker_install: "{{ confirm_docker_install | upper }}"
         confirm_install_proxy: "{{ confirm_install_proxy | upper }}"
+
+    # Sempre define le_email cedo (lê de group_vars se houver; senão, pega de ENV)
+    - name: Resolve le_email a partir de group_vars ou ENV
+      ansible.builtin.set_fact:
+        le_email: "{{ le_email | default(lookup('env','LE_EMAIL') | default('', true), true) }}"
+
     # Valida se a váriavel de URL do email usado no letsencrypt foi informada via variáveis de ambiente (ENV)
+    - name: Valida respostas S/N
+      ansible.builtin.assert:
+        that:
+          - confirm_docker_install in ['S','N']
+          - confirm_install_proxy   in ['S','N']
+        fail_msg: "Responda apenas 'S' ou 'N'."
+
     - name: Valida e-mail do Let's Encrypt quando Traefik = 'S'
       when: confirm_install_proxy == 'S'
       ansible.builtin.assert:

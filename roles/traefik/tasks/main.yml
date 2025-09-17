@@ -24,8 +24,8 @@
     owner: root
     group: root
     mode: "0600"
-  # não sobrescreve se já existir (idempotência)
-  force: no
+    # não sobrescreve se já existir (idempotência)
+    force: no
 
 - name: Renderiza docker-compose do Traefik
   ansible.builtin.template:

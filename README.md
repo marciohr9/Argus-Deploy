@@ -54,10 +54,10 @@ ansible-galaxy role install -r requirements.yml
 ansible-deploy/
 ├─ ansible.cfg
 ├─ inventory/
-│  └─ hosts.ini                 # inventário (localhost ou remotos)
+│  ├─ hosts.ini                 # inventário (localhost ou remotos)
+│  └─ group_vars/
+│     └─ all.yml                # APENAS variáveis globais       
 ├─ requirements.yml             # coleções/roles Galaxy
-├─ group_vars/
-│  └─ all.yml                   # APENAS variáveis globais
 ├─ playbooks/
 │  └─ deploy.yml                # play principal (com prompts S/N)
 └─ roles/
@@ -120,50 +120,50 @@ health_timeout_seconds: 300
 Defina a lista de projetos por `PROJECTS` e, para cada `<ID>`, configure ENVs com o **prefixo em maiúsculas e `__`**:
 
 ```
-PROJECTS="connecta,django,api"
+PROJECTS="django,api,projeto3,projeto4" # ele executa entre 1..N projetos dependendo de como definido no env
 
-<CONNECTA__REPO_URL>           # obrigatório
-<CONNECTA__AUTH>               # ssh (padrão) | https
-<CONNECTA__REPO_SSH_PRIVATE_KEY> | <CONNECTA__REPO_SSH_KEY_PATH>  # se ssh
-<CONNECTA__REPO_USERNAME>      # se https (prefira token na URL)
-<CONNECTA__REPO_PASSWORD>      # se https (prefira token na URL)
-<CONNECTA__PROJECT_NAME>       # default: connecta
-<CONNECTA__PROJECT_DIR>        # default: /opt/connecta
-<CONNECTA__COMPOSE_PATH>       # default: docker-compose.yml
-<CONNECTA__ENV_SRC>            # arquivo de envs no nó de controle; default: ./connecta.envs
+<DJANGO__REPO_URL>           # obrigatório
+<DJANGO__AUTH>               # ssh (padrão) | https
+<DJANGO__REPO_SSH_PRIVATE_KEY> | <DJANGO__REPO_SSH_KEY_PATH>  # dependendo se você vai passar a chave ssh em texto ou apontar o arquivo
+<DJANGO__REPO_USERNAME>      # se https (prefira token na URL)
+<DJANGO__REPO_PASSWORD>      # se https (prefira token na URL)
+<DJANGO__PROJECT_NAME>       # nome do projeto se preferir
+<DJANGO__PROJECT_DIR>        # default: /opt/<project>
+<DJANGO__COMPOSE_PATH>       # default: docker-compose.yml
+<DJANGO__ENV_SRC>            # arquivo de envs no nó de controle; default: ./django.env
 ```
 
 ### Exemplo prático
 ```bash
-export PROJECTS="connecta,django"
+export PROJECTS="django, flutter"
 
 # projeto 1
-export CONNECTA__REPO_URL=git@github.com:org/connecta.git
-export CONNECTA__AUTH=ssh
-export CONNECTA__REPO_SSH_KEY_PATH=~/.ssh/id_rsa
-export CONNECTA__PROJECT_NAME=connecta
-export CONNECTA__COMPOSE_PATH=docker-compose.yml
-export CONNECTA__ENV_SRC=./connecta.envs
+export DJANGO__REPO_URL=git@github.com:org/connecta.git
+export DJANGO__AUTH=ssh
+export DJANGO__REPO_SSH_KEY_PATH=~/.ssh/id_rsa
+export DJANGO__PROJECT_NAME=connecta
+export DJANGO__COMPOSE_PATH=docker-compose.yml
+export DJANGO__ENV_SRC=./connecta.envs
 
 # projeto 2
-export DJANGO__REPO_URL=https://git.example.com/org/django-app.git
-export DJANGO__AUTH=https
-export DJANGO__PROJECT_DIR=/opt/django-app
-export DJANGO__COMPOSE_PATH=docker/compose/prod.yml
-export DJANGO__ENV_SRC=./django.envs
+export FLUTTER__REPO_URL=https://git.example.com/org/django-app.git
+export FLUTTER__AUTH=https
+export FLUTTER__PROJECT_DIR=/opt/django-app
+export FLUTTER__COMPOSE_PATH=docker/compose/prod.yml
+export FLUTTER__ENV_SRC=./django.envs
 ```
 
 > **Dica:** consolide esses `export` em um `deploy.env` e rode o `bootstrap-ansible.sh` para carregá-los.
 
 ---
 
-## 🔐 Sobre os arquivos `*.envs` (control node) → `.env` do projeto
-Para cada `<ID>`, crie um arquivo `./<id>.envs` (ou aponte outro caminho via `<ID>__ENV_SRC`).  
+## 🔐 Sobre os arquivos `*.env` (control node) → `.env` do projeto
+Para cada `<ID>`, crie um arquivo `./<id>.env` (ou aponte outro caminho via `<ID>__ENV_SRC`).  
 Após o clone, a role `project_deploy` **gera/atualiza** o **`.env` na raiz do projeto** com merge **não destrutivo**:
 - **Preserva** chaves já existentes no `.env` do repositório;
-- **Adiciona** chaves ausentes a partir do `<id>.envs`.
+- **Adiciona** chaves ausentes a partir do `<id>.env`.
 
-**Exemplo de `connecta.envs`:**
+**Exemplo de `django.env`:**
 ```
 APP_IMAGE=org/connecta:latest
 APP_SECRET=supersegredo
@@ -171,7 +171,7 @@ DATABASE_URL=postgres://user:pass@db:5432/app
 VIRTUAL_HOST=app.seu-dominio.gov.br
 ```
 
-> Esses `*.envs` vivem no **nó de controle** (não no host alvo).
+> Esses `*.env` vivem no **nó de controle** (não no host alvo).
 
 ---
 

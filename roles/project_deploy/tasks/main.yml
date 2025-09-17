@@ -2,22 +2,24 @@
 # Role: project_deploy (multi-projetos)
 
 # ---------- 0) Coleta lista de projetos pela ENV PROJECTS ----------
-- name: Captura lista bruta de IDs de projetos da ENV PROJECTS
+- name: Captura IDs de projetos a partir da ENV PROJECTS
   ansible.builtin.set_fact:
-    _projects_ids_raw: "{{ lookup('env','PROJECTS') | default('', true) }}"
+    _project_ids: >-
+      {{
+        (lookup('env','PROJECTS') | default('', true))
+        | regex_replace('\\s+', '')
+        | split(',')
+        | reject('equalto','')
+        | list
+      }}
 
-- name: Converte PROJECTS em lista normalizada
-  ansible.builtin.set_fact:
-    _project_ids: "{{ _projects_ids_raw.split(',') | map('trim') | reject('equalto','') | list }}"
-
-- name: Falha se nenhum projeto foi declarado
+- name: Falha se nenhum projeto foi definido
   ansible.builtin.assert:
     that:
       - _project_ids | length > 0
-    fail_msg: >
-      Nenhum projeto encontrado. Defina PROJECTS="id1,id2" e as ENVs
-      <ID>__REPO_URL, etc.
-
+    fail_msg: >-
+      Nenhum projeto encontrado. Defina PROJECTS="id1,id2" e as ENVs <ID>__REPO_URL, etc.
+      
 # ---------- 1) Inicializa lista agregada ----------
 - name: Inicializa lista de projetos
   ansible.builtin.set_fact:
@@ -26,34 +28,44 @@
 # ---------- 2) Monta cada projeto a partir das ENVs (estilo linter-friendly) ----------
 - name: Monta estrutura de cada projeto a partir das ENVs
   vars:
-    _ID: "{{ item }}"
+    _ID:  "{{ item }}"
     _IDU: "{{ item | regex_replace('[^A-Za-z0-9_]', '_') | upper }}"
-    _default_dir: "{{ base_opt_dir ~ '/' ~ item }}"
+    _default_dir: "{{ base_opt_dir | default('/opt') ~ '/' ~ item }}"
     _env_src_default: "./{{ item }}.env"
-    project_obj:
-      id: "{{ _ID }}"
-      name: "{{ lookup('env', _IDU ~ '__PROJECT_NAME') | default(_ID, true) }}"
-      repo_url: "{{ lookup('env', _IDU ~ '__REPO_URL') | default('', true) }}"
-      auth_method: "{{ lookup('env', _IDU ~ '__AUTH') | default('ssh', true) }}"
-      ssh_key_inline: "{{ lookup('env', _IDU ~ '__REPO_SSH_PRIVATE_KEY') | default('', true) }}"
-      ssh_key_path: "{{ lookup('env', _IDU ~ '__REPO_SSH_KEY_PATH') | default('', true) }}"
-      username: "{{ lookup('env', _IDU ~ '__REPO_USERNAME') | default('', true) }}"
-      password: "{{ lookup('env', _IDU ~ '__REPO_PASSWORD') | default('', true) }}"
-      version: "{{ lookup('env', _IDU ~ '__VERSION') | default('HEAD', true) }}"
-      dir: "{{ lookup('env', _IDU ~ '__PROJECT_DIR') | default(_default_dir, true) }}"
-      compose_path: "{{ lookup('env', _IDU ~ '__COMPOSE_PATH') | default('docker-compose.yml', true) }}"
-      env_src: "{{ lookup('env', _IDU ~ '__ENV_SRC') | default(_env_src_default, true) }}"
   ansible.builtin.set_fact:
-    _projects: "{{ _projects + [ project_obj ] }}"
+    _projects: "{{ (_projects | default([])) + [ {
+        'id': _ID,
+        'name':          (lookup('env', _IDU ~ '__PROJECT_NAME')         | default(_ID, true)),
+        'repo_url':      (lookup('env', _IDU ~ '__REPO_URL')             | default('', true)),
+        'auth_method':   (lookup('env', _IDU ~ '__AUTH')                 | default('ssh', true)),
+        'ssh_key_inline':(lookup('env', _IDU ~ '__REPO_SSH_PRIVATE_KEY') | default('', true)),
+        'ssh_key_path':  (lookup('env', _IDU ~ '__REPO_SSH_KEY_PATH')    | default('', true)),
+        'username':      (lookup('env', _IDU ~ '__REPO_USERNAME')        | default('', true)),
+        'password':      (lookup('env', _IDU ~ '__REPO_PASSWORD')        | default('', true)),
+        'version':       (lookup('env', _IDU ~ '__VERSION')              | default('HEAD', true)),
+        'dir':           (lookup('env', _IDU ~ '__PROJECT_DIR')          | default(_default_dir, true)),
+        'compose_path':  (lookup('env', _IDU ~ '__COMPOSE_PATH')         | default('docker-compose.yml', true)),
+        'env_src':       (lookup('env', _IDU ~ '__ENV_SRC')              | default(_env_src_default, true))
+      } ] }}"
   loop: "{{ _project_ids }}"
-  loop_control:
-    label: "{{ item }}"
   no_log: true
 
+# debug só quando -v ou mais
+- name: Lista projetos carregados
+  ansible.builtin.debug:
+    var: _projects
+  when: (ansible_verbosity | int) >= 1
+
+# === Valida se os os projetos tem repositório definidos ===
 - name: Valida que todos os projetos possuem REPO_URL
+  vars:
+    _missing: "{{ _projects | selectattr('repo_url', 'equalto', '') | map(attribute='id') | list }}"
   ansible.builtin.assert:
-    that: "{{ (_projects | map(attribute='repo_url') | list) | select('length') | list | length == (_projects | length) }}"
-    fail_msg: "Um ou mais projetos não possuem <ID>__REPO_URL definidos."
+    that:
+      - _projects | length > 0
+      - _missing | length == 0
+    fail_msg: "Faltam REPO_URL para: {{ _missing | join(', ') }}. Defina <ID>__REPO_URL para cada ID em PROJECTS."
+    success_msg: "Todos os projetos possuem REPO_URL."
 
 # ---------- 3) Descobre se a network 'proxy' existe (uma vez) ----------
 - name: Verifica se a network externa '{{ proxy_network_name }}' existe no Docker
