@@ -95,15 +95,15 @@
     state: started
     enabled: true
     daemon_reload: true
-  when: _svc_mgr == "systemd"
+  when: _svc_mgr == "systemd"    
 
-# Sistemas Legados
+# Demais sistemas que suportam init.d
 - name: Garante serviço do Docker ativo e habilitado (service)
   ansible.builtin.service:
     name: docker
     state: started
     enabled: true
-  when: _svc_mgr not in ["systemd", "openrc"]
+  when: _svc_mgr not in ["systemd"]
 
 # valida versões do docker e docker compose
 - name: Revalida docker/compose após instalação
