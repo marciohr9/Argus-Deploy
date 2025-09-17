@@ -3,3 +3,4 @@
 !*.env.example
 *.log
 !*.example.env
+hosts.ini
