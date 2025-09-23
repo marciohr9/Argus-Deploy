@@ -1,7 +1,7 @@
 ---
 # Role: project_deploy (multi-projetos)
 
-#Coleta lista de projetos pela ENV PROJECTS
+# Coleta lista de projetos pela ENV PROJECTS
 - name: Captura IDs de projetos a partir da ENV PROJECTS
   ansible.builtin.set_fact:
     _project_ids: >-
@@ -19,13 +19,22 @@
       - _project_ids | length > 0
     fail_msg: >-
       Nenhum projeto encontrado. Defina PROJECTS="id1,id2" e as ENVs <ID>__REPO_URL, etc.
-      
-#Inicializa lista agregada
+
+# Valida token do GitHub (vem do group_vars/all.yml ou ENV GITHUB_TOKEN)
+- name: Valida github_token caso haja projetos em PROJECTS
+  when: _project_ids | length > 0
+  ansible.builtin.assert:
+    that:
+      - github_token | length > 0
+    fail_msg: "Defina github_token em group_vars/all.yml (ou GITHUB_TOKEN no ambiente) para clonar via HTTPS."
+    success_msg: "GITHUB_TOKEN definido para deploy."
+
+# Inicializa lista agregada
 - name: Inicializa lista de projetos
   ansible.builtin.set_fact:
     _projects: []
 
-#Monta cada projeto a partir das ENVs
+# Monta cada projeto a partir das ENVs
 - name: Monta estrutura de cada projeto a partir das ENVs
   vars:
     _ID:  "{{ item }}"
@@ -37,11 +46,6 @@
         'id': _ID,
         'name':          (lookup('env', _IDU ~ '__PROJECT_NAME')         | default(_ID, true)),
         'repo_url':      (lookup('env', _IDU ~ '__REPO_URL')             | default('', true)),
-        'auth_method':   (lookup('env', _IDU ~ '__AUTH')                 | default('ssh', true)),
-        'ssh_key_inline':(lookup('env', _IDU ~ '__REPO_SSH_PRIVATE_KEY') | default('', true)),
-        'ssh_key_path':  (lookup('env', _IDU ~ '__REPO_SSH_KEY_PATH')    | default('', true)),
-        'username':      (lookup('env', _IDU ~ '__REPO_USERNAME')        | default('', true)),
-        'password':      (lookup('env', _IDU ~ '__REPO_PASSWORD')        | default('', true)),
         'version':       (lookup('env', _IDU ~ '__VERSION')              | default('HEAD', true)),
         'dir':           (lookup('env', _IDU ~ '__PROJECT_DIR')          | default(_default_dir, true)),
         'compose_path':  (lookup('env', _IDU ~ '__COMPOSE_PATH')         | default('docker-compose.yml', true)),
@@ -56,7 +60,7 @@
     var: _projects
   when: (ansible_verbosity | int) >= 1
 
-#Valida se os os projetos tem repositório definidos
+# Valida se todos os projetos têm REPO_URL
 - name: Valida que todos os projetos possuem REPO_URL
   vars:
     _missing: "{{ _projects | selectattr('repo_url', 'equalto', '') | map(attribute='id') | list }}"
@@ -67,7 +71,7 @@
     fail_msg: "Faltam REPO_URL para: {{ _missing | join(', ') }}. Defina <ID>__REPO_URL para cada ID em PROJECTS."
     success_msg: "Todos os projetos possuem REPO_URL."
 
-#Descobre se a network 'proxy' existe (uma vez)
+# Descobre se a network 'proxy' existe (uma vez)
 - name: Verifica se a network externa '{{ proxy_network_name }}' existe no Docker
   community.docker.docker_network_info:
     name: "{{ proxy_network_name }}"
@@ -96,3 +100,48 @@
   loop_control:
     loop_var: project
     label: "{{ project.id }}"
+
+# Reinicia Traefik ao final do deploy (atualiza TLS/rotas)
+- name: Reinicia Traefik após deploy dos projetos
+  when: restart_traefik_after_deploy | default(true)
+  run_once: true
+  block:
+    - name: Localiza containers Traefik por labels do Compose
+      community.docker.docker_host_info:
+        containers: true
+        containers_filters:
+          label:
+            - "com.docker.compose.project={{ traefik_compose_project | default('traefik') }}"
+            - "com.docker.compose.service=traefik"
+      register: _traefik_info
+      changed_when: false
+      failed_when: false
+
+    - name: Extrai nomes dos containers Traefik (normaliza)
+      ansible.builtin.set_fact:
+        _traefik_container_names: >-
+          {{
+            (_traefik_info.containers | default([]))
+            | map(attribute='Name')
+            | map('default','')
+            | map('regex_replace','^/','')
+            | reject('equalto','')
+            | list
+            | unique
+          }}
+
+    - name: Reinicia Traefik
+      when: (_traefik_container_names | length) > 0
+      community.docker.docker_container:
+        name: "{{ item }}"
+        state: started
+        restart: true
+      loop: "{{ _traefik_container_names }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Traefik não encontrado – nada a reiniciar
+      when: (_traefik_container_names | default([]) | length) == 0
+      ansible.builtin.debug:
+        msg: "Traefik não localizado por labels (project={{ traefik_compose_project | default('traefik') }}, service=traefik). Nenhuma ação tomada."
+

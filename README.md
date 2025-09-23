@@ -96,21 +96,32 @@ Use o script **`bootstrap-ansible.sh`** para **carregar variáveis** de **todos 
 ```bash
 chmod +x bootstrap-ansible.sh
 # Carrega .env, *.env, .env.*, *.envs (exceto *.env.example)
-./bootstrap-ansible.sh
+source ./bootstrap-ansible.sh
 
 # Ou indicando explicitamente o diretório de .envs
-ENV_DIR=$PWD ./bootstrap-ansible.sh
+ENV_DIR=$PWD source ./bootstrap-ansible.sh
 ```
 
 ---
 
-## 🔧 Variáveis globais (em `group_vars/all.yml`)
+## 🔧 Variáveis globais (em `inventory/group_vars/all.yml`)
 ```yaml
-base_opt_dir: /opt
+# Diretório base onde os projetos serão clonados/implantados
+base_opt_dir: "{{ lookup('env', 'BASE_DIR') | default('/opt', true) }}"
+# Traefik (role opcional)
 traefik_dir: "{{ base_opt_dir }}/traefik"
-proxy_network_name: proxy
-le_email: "{{ lookup('env', 'LE_EMAIL') | default('', true) }}"  # usado só se Traefik = S
+# nome do projeto docker-compose do traefik (usado para reiniciar o container)
+traefik_compose_project: traefik
+# variavel para definir se reinicia o contaienr de proxy ao final da instalação
+restart_traefik_after_deploy: true
+# Nome da network Docker usada pelo Traefik (e compartilhada com os projetos)
+proxy_network_name: "{{ lookup('env', 'PROXY_NETWORK_NAME') | default('proxy', true) }}"
+# E-mail do Let's Encrypt (forneça via ENV: LE_EMAIL)
+le_email: "{{ lookup('env', 'LE_EMAIL') | default('', true) }}"
+# Tempo máximo para health-check (segundos)
 health_timeout_seconds: 300
+#github_token: "__TOKEN__GITHUT__" # caso não queira usar o token via ambiente descomente esta linha e comente a de baixo e adicione o token como string
+github_token: "{{ lookup('env','GITHUB_TOKEN') | default('', true) }}"
 ```
 > **Importante:** **não** coloque variáveis específicas de projetos aqui.
 
@@ -120,17 +131,17 @@ health_timeout_seconds: 300
 Defina a lista de projetos por `PROJECTS` e, para cada `<ID>`, configure ENVs com o **prefixo em maiúsculas e `__`**:
 
 ```
-PROJECTS="django,api,projeto3,projeto4" # ele executa entre 1..N projetos dependendo de como definido no env
+LE_EMAIL=example@example.com.br  # email que será usado pelo traefik para autenticação de certificados
+PROXY_NETWORK_NAME=proxy         # nome da rede que gerência os containers que devem ter certificados (default: 'proxy')
+BASE_OPT_DIR=/opt                # nome da pasta que deve armazenar os projetos e o traefik caso escolha (default: /opt)
+PROJECTS="projeto1,projeto2,projeto3, django"  # nome dos projetos que devem ser criados. Ele executa os projetos de 1..N separado por ',' dentro desta lista.
+GITHUB_TOKEN="ghp_exemplo_de_token"            # github token para acessar os projetos 
 
-<DJANGO__REPO_URL>           # obrigatório
-<DJANGO__AUTH>               # ssh (padrão) | https
-<DJANGO__REPO_SSH_PRIVATE_KEY> | <DJANGO__REPO_SSH_KEY_PATH>  # dependendo se você vai passar a chave ssh em texto ou apontar o arquivo
-<DJANGO__REPO_USERNAME>      # se https (prefira token na URL)
-<DJANGO__REPO_PASSWORD>      # se https (prefira token na URL)
-<DJANGO__PROJECT_NAME>       # nome do projeto se preferir
-<DJANGO__PROJECT_DIR>        # default: /opt/<project>
-<DJANGO__COMPOSE_PATH>       # default: docker-compose.yml
-<DJANGO__ENV_SRC>            # arquivo de envs no nó de controle; default: ./django.env
+<DJANGO__REPO_URL>           # (obrigatório) url do repositório de preferência em https
+<DJANGO__PROJECT_DIR>        # (opcional) caso queira mudar o nome da pasta do projeto independente do nome na lista; default: /opt/<project>
+<DJANGO__COMPOSE_PATH>       # (opcional) caminho para o arquivo docker-compose.yml (ou arquivo com nome diferente); default: docker-compose.yml
+<DJANGO__PROJECT_NAME>       # (opcional) caso queira mudar o nome do projeto independete do nome do projeto na lista; 
+<DJANGO__ENV_SRC>            # (opcional) arquivo de envs no nó de controle; default: ./django.env
 ```
 
 ### Exemplo prático
@@ -138,28 +149,25 @@ PROJECTS="django,api,projeto3,projeto4" # ele executa entre 1..N projetos depend
 export PROJECTS="django, flutter"
 
 # projeto 1
-export DJANGO__REPO_URL=git@github.com:org/connecta.git
-export DJANGO__AUTH=ssh
-export DJANGO__REPO_SSH_KEY_PATH=~/.ssh/id_rsa
-export DJANGO__PROJECT_NAME=connecta
+export DJANGO__REPO_URL=https://git.example.com/org/django-app.git
+export DJANGO__PROJECT_NAME=django-livre
 export DJANGO__COMPOSE_PATH=docker-compose.yml
-export DJANGO__ENV_SRC=./connecta.envs
+export DJANGO__ENV_SRC=./django.env
 
 # projeto 2
-export FLUTTER__REPO_URL=https://git.example.com/org/django-app.git
-export FLUTTER__AUTH=https
-export FLUTTER__PROJECT_DIR=/opt/django-app
+export FLUTTER__REPO_URL=https://git.example.com/org/flutter-app.git
+export FLUTTER__PROJECT_DIR=/opt/flutter-app
 export FLUTTER__COMPOSE_PATH=docker/compose/prod.yml
-export FLUTTER__ENV_SRC=./django.envs
+export FLUTTER__ENV_SRC=./flutter.env
 ```
 
-> **Dica:** consolide esses `export` em um `deploy.env` e rode o `bootstrap-ansible.sh` para carregá-los.
+> **Dica:** consolide esses `export` em um `.env` e rode o `bootstrap-ansible.sh` para carregá-los.
 
 ---
 
 ## 🔐 Sobre os arquivos `*.env` (control node) → `.env` do projeto
 
-Para cada `<ID>`, crie um arquivo `./<id>.env` (ou aponte outro caminho via `<ID>__ENV_SRC`).  
+Para cada `<ID>`, crie um arquivo `./<ID>.env` (ou aponte outro caminho via `<ID>__ENV_SRC`).  
 Após o clone, a role `project_deploy` **copia** o **`<ID>.env` que está na raiz do playbook** e tranvere para o node **dentro da pasta do projeto com o nome `.env`**.
 
 **Exemplo de `django.env`:**
@@ -170,7 +178,7 @@ DATABASE_URL=postgres://user:pass@db:5432/app
 VIRTUAL_HOST=app.seu-dominio.gov.br
 ```
 
-> Esses `*.env` vivem no **nó de controle** (não no host alvo).
+> Esses `<ID>.env` vivem no **nó de controle** (não no host alvo).
 ---
 
 ## 📒 Inventário
@@ -190,15 +198,15 @@ app02 ansible_host=10.0.0.12 ansible_user=ubuntu
 ---
 
 ## ▶️ Execução
-1) Garanta as ENVs carregadas (ex.: `source deploy.env` **ou** use o `bootstrap-ansible.sh`).  
+1) Garanta as ENVs carregadas (ex.: use `export EXAMPLE_ENV=teste` para cada uma das envs necessárias, `source .env` **ou** use o `source bootstrap-ansible.sh`).  
 2) Rode o play:
 ```bash
-ansible-playbook playbooks/deploy.yml -K
+ansible-playbook playbooks/deploy.yml
 ```
 
 Durante a execução você verá **prompts S/N**:
-1. Checar/instalar **Docker/Compose**? (default **S**)  
-2. Instalar **Traefik + Let’s Encrypt**? (S/N)
+1. Checar/instalar **Docker/Compose**? (S/N) (default **S**)  
+2. Instalar **Traefik + Let’s Encrypt**? (S/N) (default **S**)
 
 ---
 
@@ -206,8 +214,9 @@ Durante a execução você verá **prompts S/N**:
 1. **Clona/atualiza** o repositório em `/opt/<id>` (ou `<ID>__PROJECT_DIR`).
 2. **Gera/atualiza `.env`** a partir de `<ID>__ENV_SRC` (ex.: `./connecta.envs`).
 3. **(Se a rede `proxy` existir)** injeta a network externa `proxy` no `docker-compose.yml` e vincula todos os serviços.
-4. Executa **build** e **up -d** com Compose v2 (respeitando `COMPOSE_PATH`).
-5. Faz **health-check**: containers com `HEALTHCHECK` devem ficar `healthy`; os demais ao menos `running`.
+4. **Derruba** containers que pertencerem ao **mesmo projeto** sendo executado na lista ou que tenham **nome similar** ao container no projeto.
+5. Executa **build** e **up -d** com Compose v2 (respeitando `COMPOSE_PATH`).
+6. Faz **health-check**: containers com `HEALTHCHECK` devem ficar `healthy`; os demais ao menos `running`.
 
 > A rede `proxy` é criada pela role **traefik**. Se você não instalar o Traefik, nenhum patch de rede é aplicado.
 

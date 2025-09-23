@@ -17,41 +17,45 @@
     state: directory
     mode: "0755"
 
-# Clone/Update (SSH)
-- name: (SSH) Grava chave privada temporária quando fornecida inline
-  when: project.auth_method == 'ssh' and project.ssh_key_inline | length > 0
-  no_log: false
-  ansible.builtin.copy:
-    dest: "{{ project.dir }}/.git_ssh_key"
-    content: "{{ project.ssh_key_inline }}"
-    mode: "0600"
-
-- name: (SSH) Clona/atualiza repositório
-  when: project.auth_method == 'ssh'
-  no_log: false
-  ansible.builtin.git:
-    repo: "{{ project.repo_url }}"
-    dest: "{{ project.dir }}"
-    key_file: >-
+# Normaliza para HTTPS (caso repo_url venha como SSH)
+- name: Converte repo_url para HTTPS (se vier em formato SSH)
+  ansible.builtin.set_fact:
+    _repo_url_https: >-
       {{
-        (project.ssh_key_inline | length > 0)
-          | ternary(project.dir ~ '/.git_ssh_key', project.ssh_key_path)
+        project.repo_url
+        | regex_replace('^ssh://git@github\\.com/(.*)$', 'https://github.com/\\1')
+        | regex_replace('^git@github\\.com:(.*)$',         'https://github.com/\\1')
       }}
-    version: "{{ project.version | default('HEAD') }}"
-    accept_hostkey: true
-    update: yes
-    force: yes
 
-# Clone/Update (HTTPS)
-- name: (HTTPS) Clona/atualiza repositório
-  when: project.auth_method == 'https'
+# Injeta token na URL
+- name: Monta URL autenticada com token
+  no_log: false
+  ansible.builtin.set_fact:
+    _repo_url_auth: >-
+      {{
+        _repo_url_https
+        | regex_replace('^https://', 'https://x-access-token:' ~ (github_token | urlencode) ~ '@')
+      }}
+
+# Clone/Update com token via HTTPS
+- name: Clona/atualiza repositório (HTTPS + token)
   no_log: false
   ansible.builtin.git:
-    repo: "{{ project.repo_url }}"
+    repo: "{{ _repo_url_auth }}"
     dest: "{{ project.dir }}"
     version: "{{ project.version | default('HEAD') }}"
     update: yes
     force: yes
+    accept_hostkey: true
+
+# Remove o token da URL remota
+- name: Remove token da origem (.git/config) substituindo pela URL sem credenciais
+  no_log: true
+  ansible.builtin.command: >
+    git remote set-url origin {{ _repo_url_https }}
+  args:
+    chdir: "{{ project.dir }}"
+  changed_when: true
 
 # docker-compose obrigatório
 - name: Verifica existência do docker-compose no caminho informado
@@ -72,13 +76,12 @@
     _repo_root: "{{ playbook_dir | regex_replace('/[^/]+$', '') }}"
 
 # Caminho base preferido para o env (relativo → raiz do repo)
+# (sem delegate_to: queremos a var gravada no host alvo)
 - name: Calcula caminho preferencial do arquivo de env (relativo → repo_root)
   ansible.builtin.set_fact:
     _env_src_candidate: >-
       {{
-        (
-          project.env_src | default('./' ~ project.id ~ '.env')
-        )
+        (project.env_src | default('./' ~ project.id ~ '.env'))
         | regex_replace('^\\./','')
       }}
 
@@ -100,7 +103,7 @@
     path: "{{ _env_src_abs }}"
   register: _env_src_stat
   delegate_to: localhost
-  run_once: true
+  become: false
 
 # Fallback: se não existir em repo_root, tenta playbook_dir/<env>
 - name: Aplica fallback para playbook_dir quando necessário
@@ -108,13 +111,13 @@
   ansible.builtin.set_fact:
     _env_src_abs: "{{ playbook_dir ~ '/' ~ _env_src_candidate }}"
 
-# Checa novamente após fallback
+# Checa novamente após fallback (no controlador)
 - name: Verifica existência após fallback (controller)
   ansible.builtin.stat:
     path: "{{ _env_src_abs }}"
   register: _env_src_stat2
   delegate_to: localhost
-  run_once: true
+  become: false
 
 # Falha clara se não encontrou em nenhum lugar
 - name: Falha se o arquivo de env não foi encontrado no controlador
@@ -129,7 +132,7 @@
 # Copia o arquivo bruto do controlador para o host alvo como <dir>/.env
 - name: Copia {{ _env_src_abs }} → {{ project.dir }}/.env (destino)
   ansible.builtin.copy:
-    src: "{{ _env_src_abs }}"     # lido no controlador (padrão do módulo copy)
+    src: "{{ _env_src_abs }}"   # lido no controlador (default do copy)
     dest: "{{ project.dir }}/.env"
     force: true
     backup: false
@@ -157,6 +160,70 @@
     dest: "{{ _compose_abs_path }}"
     content: "{{ compose_data | to_nice_yaml(indent=2) }}"
     mode: "0644"
+## BUILD de IMAGEM E DEPLOY ##
+#Remove containers do mesmo projeto (labels do compose)
+- name: Descobre containers existentes do projeto (labels)
+  community.docker.docker_host_info:
+    containers: true
+    containers_filters:
+      label:
+        - "com.docker.compose.project={{ project.name }}"
+        - "com.docker.compose.oneoff!=True"
+  register: _existing_by_label
+
+- name: Remove containers existentes do projeto (kill + rm)
+  when: (_existing_by_label.containers | default([])) | length > 0
+  community.docker.docker_container:
+    name: "{{ item.Name | regex_replace('^/','') }}"
+    state: absent
+    force_kill: true
+    keep_volumes: true
+  loop: "{{ _existing_by_label.containers }}"
+  loop_control:
+    label: "{{ item.Name | regex_replace('^/','') }}"
+
+# Se houver container_name explícito no compose, remova conflitos por nome (isso cobre casos fora do compose do projeto ou leftovers sem label)
+- name: Carrega compose para extrair container_name (se ainda não carregado)
+  when: compose_data is not defined
+  ansible.builtin.slurp:
+    src: "{{ _compose_abs_path }}"
+  register: _compose_slurp_for_names
+
+- name: Converte YAML para dict (se ainda não carregado)
+  when: compose_data is not defined
+  ansible.builtin.set_fact:
+    compose_data: "{{ _compose_slurp_for_names.content | b64decode | from_yaml }}"
+
+- name: Lista container_name explícitos no compose
+  ansible.builtin.set_fact:
+    _explicit_container_names: >-
+      {{
+        (compose_data.services | default({}))
+        | dict2items
+        | map(attribute='value.container_name')
+        | select('defined')
+        | list
+      }}
+
+- name: Coleta info de containers com nomes explícitos (se existirem)
+  when: (_explicit_container_names | length) > 0
+  community.docker.docker_container_info:
+    name: "{{ item }}"
+  loop: "{{ _explicit_container_names }}"
+  register: _ci_named
+  failed_when: false
+  changed_when: false
+
+- name: Remove containers com nomes explícitos que existam
+  when: (_ci_named.results | selectattr('container','defined') | list | length) > 0
+  community.docker.docker_container:
+    name: "{{ item.container.Name | regex_replace('^/','') }}"
+    state: absent
+    force_kill: true
+    keep_volumes: true
+  loop: "{{ _ci_named.results | selectattr('container','defined') | list }}"
+  loop_control:
+    label: "{{ item.container.Name | regex_replace('^/','') }}"
 
 # Build & Up com Compose v2
 - name: Build das imagens do projeto

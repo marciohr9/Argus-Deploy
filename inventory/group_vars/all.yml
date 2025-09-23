@@ -3,13 +3,17 @@
 
 # Diretório base onde os projetos serão clonados/implantados
 base_opt_dir: "{{ lookup('env', 'BASE_DIR') | default('/opt', true) }}"
-
 # Traefik (role opcional)
 traefik_dir: "{{ base_opt_dir }}/traefik"
+# nome do projeto docker-compose do traefik (usado para reiniciar o container)
+traefik_compose_project: traefik
+# variavel para definir se reinicia o contaienr de proxy ao final da instalação
+restart_traefik_after_deploy: true
+# Nome da network Docker usada pelo Traefik (e compartilhada com os projetos)
 proxy_network_name: "{{ lookup('env', 'PROXY_NETWORK_NAME') | default('proxy', true) }}"
-
 # E-mail do Let's Encrypt (forneça via ENV: LE_EMAIL)
 le_email: "{{ lookup('env', 'LE_EMAIL') | default('', true) }}"
-
 # Tempo máximo para health-check (segundos)
 health_timeout_seconds: 300
+#github_token: "__TOKEN__GITHUT__" # caso não queira usar o token via ambiente descomente esta linha e comente a de baixo e adicione o token como string
+github_token: "{{ lookup('env','GITHUB_TOKEN') | default('', true) }}"

@@ -49,4 +49,4 @@ for f in "$@"; do
 done
 
 echo "[INFO ] Variáveis carregadas para o ambiente atual."
-echo "[INFO ] Agora rode: ansible-playbook playbooks/deploy.yml -K"
+echo "[INFO ] Agora rode: ansible-playbook playbooks/deploy.yml"
