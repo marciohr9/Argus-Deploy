@@ -9,7 +9,7 @@ echo "[INFO ] Carregando .env a partir de: $ENV_DIR"
 
 # Monta a lista (ordem lexicográfica natural das globs)
 set --  # zera parâmetros posicionais
-for pat in ".env" "*.env" ".env.*" "*.envs"; do
+for pat in ".env" ".envs"; do
   for f in "$ENV_DIR"/$pat; do
     [ -f "$f" ] || continue
     case "$f" in
