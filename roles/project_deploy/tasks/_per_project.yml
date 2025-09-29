@@ -170,17 +170,31 @@
         - "com.docker.compose.project={{ project.name }}"
         - "com.docker.compose.oneoff!=True"
   register: _existing_by_label
+  changed_when: false
+  failed_when: false
+
+- name: Normaliza nomes dos containers encontrados por label
+  ansible.builtin.set_fact:
+    _existing_by_label_names: >-
+      {{
+        (_existing_by_label.containers | default([]))
+        | map(attribute='Name')
+        | map('default','')
+        | map('regex_replace','^/','')
+        | reject('equalto','')
+        | list
+      }}
 
 - name: Remove containers existentes do projeto (kill + rm)
-  when: (_existing_by_label.containers | default([])) | length > 0
+  when: (_existing_by_label_names | length) > 0
   community.docker.docker_container:
-    name: "{{ item.Name | regex_replace('^/','') }}"
+    name: "{{ item }}"
     state: absent
     force_kill: true
     keep_volumes: true
-  loop: "{{ _existing_by_label.containers }}"
+  loop: "{{ _existing_by_label_names }}"
   loop_control:
-    label: "{{ item.Name | regex_replace('^/','') }}"
+    label: "{{ item }}"
 
 # Se houver container_name explícito no compose, remova conflitos por nome (isso cobre casos fora do compose do projeto ou leftovers sem label)
 - name: Carrega compose para extrair container_name (se ainda não carregado)
@@ -214,14 +228,25 @@
   failed_when: false
   changed_when: false
 
+- name: Normaliza lista de containers existentes por nome
+  ansible.builtin.set_fact:
+    _ci_named_results: >-
+      {{
+        (_ci_named.results
+         if (_ci_named is defined and _ci_named.results is defined)
+         else [])
+        | selectattr('container','defined')
+        | list
+      }}
+
 - name: Remove containers com nomes explícitos que existam
-  when: (_ci_named.results | selectattr('container','defined') | list | length) > 0
+  when: (_ci_named_results | length) > 0
   community.docker.docker_container:
     name: "{{ item.container.Name | regex_replace('^/','') }}"
     state: absent
     force_kill: true
     keep_volumes: true
-  loop: "{{ _ci_named.results | selectattr('container','defined') | list }}"
+  loop: "{{ _ci_named_results }}"
   loop_control:
     label: "{{ item.container.Name | regex_replace('^/','') }}"
 
